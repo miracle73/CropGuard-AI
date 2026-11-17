@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CropGuard AI - WhatsApp crop disease bot (MVP)
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Architectures: [arm64]
+    MemorySize: 512
+    CodeUri: src/
+    Environment:
+      Variables:
+        QUEUE_URL: !Ref JobQueue
+        TABLE: !Ref Diagnoses
+        FARMERS: !Ref Farmers
+        BUCKET: !Ref Images
+        SSM_PREFIX: /cropguard
+Resources:
+  Images:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      LifecycleConfiguration: { Rules: [{ Status: Enabled, ExpirationInDays: 30 }] }
+  Farmers:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: phone, AttributeType: S}]
+      KeySchema: [{AttributeName: phone, KeyType: HASH}]
+  AdminFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: admin.handler
+      Timeout: 15
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors: { AllowOrigins: ['*'], AllowHeaders: [x-admin-pass], AllowMethods: [GET] }
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref Diagnoses }
+        - DynamoDBReadPolicy: { TableName: !Ref Farmers }
+        - S3ReadPolicy: { BucketName: !Ref Images }
+        - SSMParameterReadPolicy: { ParameterName: cropguard/* }
+  JobQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 120
+      RedrivePolicy: { deadLetterTargetArn: !GetAtt DLQ.Arn, maxReceiveCount: 3 }
+  DLQ:
+    Type: AWS::SQS::Queue
+  Diagnoses:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: phone, AttributeType: S}, {AttributeName: ts, AttributeType: S}]
+      KeySchema: [{AttributeName: phone, KeyType: HASH}, {AttributeName: ts, KeyType: RANGE}]
+  WebhookFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: webhook.handler
+      Timeout: 10
+      FunctionUrlConfig: { AuthType: NONE }
+      Policies:
+        - SQSSendMessagePolicy: { QueueName: !GetAtt JobQueue.QueueName }
+        - SSMParameterReadPolicy: { ParameterName: cropguard/* }
+  WorkerFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: worker.handler
+      Timeout: 60
+      Events:
+        Q: { Type: SQS, Properties: { Queue: !GetAtt JobQueue.Arn, BatchSize: 1, ScalingConfig: { MaximumConcurrency: 5 } } }
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref Diagnoses }
+        - DynamoDBCrudPolicy: { TableName: !Ref Farmers }
+        - S3CrudPolicy: { BucketName: !Ref Images }
+        - SSMParameterReadPolicy: { ParameterName: cropguard/* }
+  AdminLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${AdminFn}', RetentionInDays: 7 }
+  WebhookLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${WebhookFn}', RetentionInDays: 7 }
+  WorkerLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${WorkerFn}', RetentionInDays: 7 }
+Outputs:
+  WebhookUrl:
+    Value: !GetAtt WebhookFnUrl.FunctionUrl
+  AdminUrl:
+    Value: !GetAtt AdminFnUrl.FunctionUrl

@@ -1,0 +1,4 @@
+packaged.yaml
+.vercel/
+.aws-sam/
+node_modules/

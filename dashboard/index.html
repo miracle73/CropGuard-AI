@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CropGuard AI Admin</title>
+<style>
+body{font-family:system-ui;margin:16px;background:#f6f8f5;color:#1c2b1c}h1{color:#2e7d32}
+.cards{display:flex;gap:12px;flex-wrap:wrap}.card{background:#fff;padding:12px 16px;border-radius:8px;box-shadow:0 1px 3px #0002}
+table{width:100%;border-collapse:collapse;background:#fff;margin-top:16px;font-size:14px}td,th{padding:8px;border-bottom:1px solid #e3e8e3;text-align:left}
+img{width:64px;height:64px;object-fit:cover;border-radius:4px}.wrap{overflow-x:auto}
+input,button{padding:8px;font-size:15px}button{background:#2e7d32;color:#fff;border:0;border-radius:4px}#err{color:#c62828}
+</style></head>
+<body>
+<h1>🌿 CropGuard AI Admin</h1>
+<form id="login"><input id="pass" type="password" placeholder="Admin password" required> <button>Sign in</button> <span id="err"></span></form>
+<div id="app" hidden>
+  <div class="cards"><div class="card"><b id="f"></b><br>Farmers</div><div class="card"><b id="d"></b><br>Diagnoses</div><div class="card"><b>Top diseases</b><ul id="top"></ul></div></div>
+  <div class="wrap"><table><thead><tr><th>Photo</th><th>Time</th><th>Phone</th><th>Crop</th><th>Result</th><th>Severity</th><th>Confidence</th></tr></thead><tbody id="rows"></tbody></table></div>
+</div>
+<script>
+const API = 'https://7awibafldprs7ruoqzrx5lzxf40zbhnz.lambda-url.us-east-1.on.aws/'; // the AdminUrl output from the AWS stack
+const $ = id => document.getElementById(id);
+const esc = v => String(v ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function load(pass) {
+  const r = await fetch(API, { headers: { 'x-admin-pass': pass } });
+  if (!r.ok) { $('err').textContent = 'Wrong password'; return; }
+  sessionStorage.setItem('p', pass);
+  const data = await r.json();
+  $('f').textContent = data.farmers; $('d').textContent = data.diagnoses;
+  const counts = {};
+  data.scans.forEach(s => { if (s.disease && !s.healthy) counts[s.disease] = (counts[s.disease] || 0) + 1; });
+  $('top').innerHTML = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `<li>${esc(k)}: ${v}</li>`).join('') || '<li>None yet</li>';
+  $('rows').innerHTML = data.scans.map(s => `<tr><td>${s.image ? `<img src="${esc(s.image)}">` : ''}</td><td>${esc(s.ts.slice(0, 16).replace('T', ' '))}</td><td>${esc(s.phone)}</td><td>${esc(s.crop)}</td><td>${esc(s.healthy ? 'Healthy' : s.disease)}</td><td>${esc(s.severity)}</td><td>${Math.round((s.confidence || 0) * 100)}%</td></tr>`).join('');
+  $('login').hidden = true; $('app').hidden = false;
+}
+$('login').onsubmit = e => { e.preventDefault(); load($('pass').value); };
+const saved = sessionStorage.getItem('p'); if (saved) load(saved);
+</script>
+</body></html>
